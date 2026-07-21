@@ -293,7 +293,7 @@ function injectThinking(bodyBuffer) {
 }
 
 // ── SSE 流式转发 ──────────────────────────────────────
-async function pipeStream(response, res, reqId, onData, idleTimeoutMs = 60_000) {
+async function pipeStream(response, res, reqId, reqBytes, onData, idleTimeoutMs = 60_000) {
   res.writeHead(response.status, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -303,6 +303,9 @@ async function pipeStream(response, res, reqId, onData, idleTimeoutMs = 60_000) 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // 跟踪流式 usage（讯飞/OpenAI 在最终 chunk 带 usage），流结束后上报
+  let lastUsage = null;
+  let lastFinish = null;
 
   // 统一出口：转发给客户端，同时喂给日志采集器
   const _emit = (chunk) => {
@@ -346,6 +349,16 @@ async function pipeStream(response, res, reqId, onData, idleTimeoutMs = 60_000) 
       for (const line of lines) {
         // 只转发 data: 行和空行（SSE 分隔符），过滤讯飞非标准 event:
         if (line.startsWith("data:")) {
+          // 解析 usage（讯飞/OpenAI 流式在最终 chunk 带 usage）
+          const payload = line.slice(5).trim();
+          if (payload && payload !== "[DONE]") {
+            try {
+              const obj = JSON.parse(payload);
+              if (obj.usage) lastUsage = obj.usage;
+              const fr = obj.choices?.[0]?.finish_reason;
+              if (fr) lastFinish = fr;
+            } catch {}
+          }
           _emit(line + "\n");
         } else if (line === "") {
           _emit("\n");
@@ -368,6 +381,18 @@ async function pipeStream(response, res, reqId, onData, idleTimeoutMs = 60_000) 
   } finally {
     res.off("close", onClientClose);
     try { reader.releaseLock(); } catch {}
+  }
+  // 流结束后上报 usage（对比 reqBytes vs 讯飞报的 token，用于诊断 cache 虚高）
+  if (lastUsage) {
+    const u = lastUsage;
+    emit("usage", {
+      id: reqId, stream: true, reqBytes,
+      in: u.prompt_tokens,
+      out: u.completion_tokens,
+      cached: u.prompt_tokens_details?.cached_tokens,
+      total: u.total_tokens,
+      finish: lastFinish,
+    });
   }
   if (!res.writableEnded) res.end();
 }
@@ -470,7 +495,7 @@ const server = http.createServer(async (req, res) => {
         logDetail(`[${_ts()}] ← STREAM ${upstreamResp.status}\n`);
       }
       const collector = LOG_LEVEL >= 2 ? (chunk) => logDetail(chunk) : null;
-      await pipeStream(upstreamResp, res, reqId, collector);
+      await pipeStream(upstreamResp, res, reqId, bodyBuffer?.length || 0, collector);
       if (LOG_LEVEL >= 2) {
         logDetail(`[${_ts()}] STREAM 完成 (${Date.now() - startTime}ms)\n${"═".repeat(60)}\n`);
       }
@@ -485,6 +510,21 @@ const server = http.createServer(async (req, res) => {
       });
       res.writeHead(upstreamResp.status, respHeaders);
       res.end(bodyText);
+      // 非流式：解析 usage 上报（用于诊断 cache 虚高）
+      if (isChat) {
+        try {
+          const resp = JSON.parse(bodyText);
+          const u = resp.usage || {};
+          emit("usage", {
+            id: reqId, stream: false, reqBytes: bodyBuffer?.length || 0,
+            in: u.prompt_tokens,
+            out: u.completion_tokens,
+            cached: u.prompt_tokens_details?.cached_tokens,
+            total: u.total_tokens,
+            finish: resp.choices?.[0]?.finish_reason,
+          });
+        } catch {}
+      }
       if (LOG_LEVEL >= 2) {
         logDetail(
           `[${_ts()}] ← ${upstreamResp.status} (${Date.now() - startTime}ms)\n` +

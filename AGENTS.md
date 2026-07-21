@@ -53,3 +53,28 @@
 ### 注意
 - 扩展已转为**全局**：`~/.pi/agent/extensions/xf-proxy-status.ts`，所有项目都能用；默认日志路径硬编码 `D:/xf-proxy/logs/proxy-events.jsonl`，可通过 `XF_PROXY_LOG` 环境变量覆盖
 - 冷却时长 2026-07-22 从 10s 调为 5s（代码默认 + `service.ps1` envVars 同改）
+
+## 2026-07-22: 代理透传上游 usage 事件，诊断 cache 虚高
+
+### 事由
+调查 pi footer 上下文百分比在 40%↔20% 间反复跳变。排查后确认：
+- pi 没压缩（无 compaction entry，发送量单调增）
+- 讯飞 GLM-5.2 真实窗口 ≥873k token（探针 1.46M 字符全中针），不截断
+- 根因是讯飞 prompt cache 在多轮递增场景下偶尔命中更大的历史缓存，把 `cacheRead` 虚报进 `totalTokens`，cache 失效后回落
+- 唯一没坐实的一环：无法从 pi session jsonl 精确证明"讯飞报的 total 虚高" vs "pi 真发了那么多"
+
+### 做了什么
+给 `xunfei-proxy.js` 加 usage 透传：
+- 流式：`pipeStream` 逐行解析 `data:` chunk，取最终 chunk 的 `usage` 字段
+- 非流式：直接 `JSON.parse` 响应体取 `usage`
+- 两条路径都发 `usage` 结构化事件到 `logs/proxy-events.jsonl`：
+  `{t:"usage", id, stream, reqBytes, in, out, cached, total, finish}`
+  `reqBytes` = 代理收到的请求体字节数，`in/cached/total` = 讯飞报的 token
+- 下次 pi 跳变时，对比 `reqBytes`（pi 实际发了多少）vs `in/cached/total`（讯飞认了多少）即可坐实根因
+- `pipeStream` 签名加了 `reqBytes` 参数
+
+### 注意
+- 只加日志，不改转发逻辑，不影响功能
+- 流式 usage 在最终 chunk（`finish_reason:stop` 那条 data）里，已验证讯飞会发
+- `service.ps1 install` 重启生效（改 envVars 或代码都要 install，见 2026-07-19 教训）
+- 排查时 `tail -f logs/proxy-events.jsonl | grep usage` 看每轮 token 数
