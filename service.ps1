@@ -13,7 +13,7 @@
 
 param([Parameter(Position=0)][ValidateSet('install','uninstall','status')]$Action='status')
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $nssm = Join-Path $dir "bin\nssm.exe"
 
