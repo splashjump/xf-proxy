@@ -117,3 +117,23 @@
 - 流式 usage 在最终 chunk（`finish_reason:stop` 那条 data）里，已验证讯飞会发
 - `service.ps1 install` 重启生效（改 envVars 或代码都要 install，见 2026-07-19 教训）
 - 排查时 `tail -f logs/proxy-events.jsonl | grep usage` 看每轮 token 数
+
+## 2026-07-22: pi 扩展按 session id 隔离多终端
+
+### 事由
+代理是单进程共享，所有 pi 终端的请求事件都写进同一个 `proxy-events.jsonl`，而每个 pi 终端的插件都 tail 这份文件且把**所有**事件喂进单一 Runtime——A 终端发请求，B 终端 footer 也跟着跳，分不清谁是谁的请求。
+
+### 做了什么
+利用 pi 原生的 `ctx.sessionManager.getSessionId()`（每终端/session 唯一）打通终端标识：
+- **插件侧** `xf-proxy-status.ts`：注册 `before_provider_headers` 事件，给出站请求注入 `x-pi-session` 头（值 = 当前 session id）；`startup` 里 `rt.sid = ctx.sessionManager.getSessionId()`；`applyEvent` 按 sid 过滤（`start`/`fatal` 全局事件放行），footer 和 widget 的 `rawLines` 都只收本会话事件
+- **代理侧** `xunfei-proxy.js`：请求入口读 `req.headers["x-pi-session"]`，登记到 `reqSidMap`（reqId → sid）；`emit` 时给已登记 reqId 的事件自动补 `src:"pi"` + `sid` 字段；请求结束 `finally` 里删除登记。全局事件（`start`/`fatal`）不带 sid
+
+事件长这样：`{"t":"req_start",...,"src":"pi","sid":"019f87dd-..."}`
+
+### 注意
+- **插件运行路径 ≠ 编辑路径**：编辑处在 `pi-extension/xf-proxy-status.ts`，pi 实际加载全局副本 `C:\Users\lenovo\.pi\agent\extensions\xf-proxy-status.ts`。**改完必须 cp 覆盖到全局，再让用户 /reload（或重开终端），否则改动完全不生效**（详见 `pi-extension/AGENTS.md`）
+- 本次首次实现时就踩了这个坑：只改编辑处、没覆盖运行处，导致头没注入、代理日志全无 `src/sid`，多终端仍同步。根因即运行路径被忽略
+- `before_provider_headers` 对所有 provider 触发；给非 xf-proxy 的 provider 也注入此 header 无害（上游不读）
+- 非 pi 客户端（`xf-test` 探针、curl）不带 `x-pi-session` → 事件无 `src/sid` → 不被任何终端匹配 → 不污染 footer（期望行为）
+- 代理改代码需 `Restart-Service`（或 `service.ps1 install`，见 2026-07-19 教训）；插件改代码需覆盖全局 + /reload
+- 验证全链路：发请求后 `cat logs/proxy-events.jsonl`，pi 的请求事件应带 `"src":"pi","sid":"..."`

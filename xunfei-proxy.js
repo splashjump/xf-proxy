@@ -66,6 +66,9 @@ const JITTER_RATIO = 0.15;
 // 进程标识 + 请求自增序号，用于结构化日志里的请求 ID（跨重启唯一）
 const procTag = Date.now().toString(36);
 let reqSeq = 0;
+// 请求级 pi 会话标识：插件经 before_provider_headers 注入 x-pi-session 头，
+// 代理把 sid 关联到 reqId，emit 时自动补到该请求的所有事件（src="pi"）。
+const reqSidMap = new Map();
 
 // ── 日志配置 ──────────────────────────────────────────
 //   none   — 不输出任何日志
@@ -115,6 +118,12 @@ function _appendEventLine(line) {
 /** 发出一个结构化事件：写 JSONL（始终）+ 可读 stderr 行（simple/full 级）。 readable 留空则只写结构化日志。 */
 function emit(type, fields = {}, readable) {
   const obj = { t: type, ts: Date.now(), ...fields };
+  // 来自 pi 的请求（req_start 时已登记 sid）自动标注来源与终端标识
+  const rid = obj.id;
+  if (rid && reqSidMap.has(rid)) {
+    obj.src = "pi";
+    obj.sid = reqSidMap.get(rid);
+  }
   _appendEventLine(JSON.stringify(obj));
   if (readable && LOG_LEVEL >= 1) {
     console.error(`[${_ts()}] ${readable}`);
@@ -461,6 +470,9 @@ const server = http.createServer(async (req, res) => {
 
   const isChat = upstreamPath === "/chat/completions";
 
+  // pi 客户端经 before_provider_headers 注入 x-pi-session 头；登记到 reqId 供 emit 自动补 sid/src
+  const piSid = req.headers["x-pi-session"];
+  if (piSid) reqSidMap.set(reqId, piSid);
   emit("req_start", { id: reqId, method: req.method, path: upstreamPath, chat: isChat });
 
   let bodyBuffer;
@@ -573,6 +585,7 @@ const server = http.createServer(async (req, res) => {
       res.end();
     }
   } finally {
+    reqSidMap.delete(reqId);
     res.off("close", onClientClose);
   }
 });
