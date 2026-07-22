@@ -51,7 +51,7 @@
 - 每 10s 探活 `/health`，服务停了（含 `Stop-Service` 不写日志的场景）会显示已停止
 
 ### 注意
-- 扩展已转为**全局**：`~/.pi/agent/extensions/xf-proxy-status.ts`，所有项目都能用；默认日志路径硬编码 `D:/xf-proxy/logs/proxy-events.jsonl`，可通过 `XF_PROXY_LOG` 环境变量覆盖
+- 扩展已转为**全局**：`~/.pi/agent/extensions/xf-proxy-status.ts`，所有项目都能用；默认日志路径硬编码 `T:/xf-proxy/logs/proxy-events.jsonl`（项目从 D 盘迁到 T 盘时同步改过，曾因路径没跟手导致插件不生效），可通过 `XF_PROXY_LOG` 环境变量覆盖
 - 冷却时长 2026-07-22 从 10s 调为 5s（代码默认 + `service.ps1` envVars 同改）
 
 ## 2026-07-22: 代理透传上游 usage 事件，诊断 cache 虚高
