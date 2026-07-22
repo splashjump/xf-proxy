@@ -64,8 +64,8 @@ notepad .env
 | 停止 | `.\stop-proxy.ps1`，或 `Stop-Service xf-proxy`（管理员） |
 | 重启 | `Restart-Service xf-proxy`（管理员） |
 | 状态 | `Get-Service xf-proxy` 或 `.\service.ps1 status` |
-| 安装/刷新 | `.\service.ps1 install`（管理员） |
-| 卸载 | `.\service.ps1 uninstall`（管理员） |
+| 安装/刷新 | `.\service.ps1 install`（管理员，或双击 `script\install-proxy.bat`） |
+| 卸载 | `.\service.ps1 uninstall`（管理员，或双击 `script\uninstall-proxy.bat`） |
 | 健康检查 | `Invoke-RestMethod http://127.0.0.1:3000/health` |
 
 **平时无需手动启动**：服务已设开机自启 + 崩溃重启。
@@ -127,6 +127,7 @@ Get-Content logs\proxy-stderr.log -Tail 30
 | 服务管理脚本 | `service.ps1`（install / uninstall / status） |
 | 启动封装 | `start-proxy.ps1` |
 | 停止封装 | `stop-proxy.ps1` |
+| 双击安装/卸载 | `script\install-proxy.bat` / `script\uninstall-proxy.bat`（自动 UAC 提权） |
 | nssm.exe | `bin\nssm.exe` |
 | 事件日志 | `logs\proxy-events.jsonl`（结构化，供 pi 扩展读取） |
 | stderr 日志 | `logs\proxy-stderr.log`（可读行，nssm 重定向） |

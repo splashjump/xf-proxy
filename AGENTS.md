@@ -54,6 +54,22 @@
 - 扩展已转为**全局**：`~/.pi/agent/extensions/xf-proxy-status.ts`，所有项目都能用；默认日志路径硬编码 `T:/xf-proxy/logs/proxy-events.jsonl`（项目从 D 盘迁到 T 盘时同步改过，曾因路径没跟手导致插件不生效），可通过 `XF_PROXY_LOG` 环境变量覆盖
 - 冷却时长 2026-07-22 从 10s 调为 5s（代码默认 + `service.ps1` envVars 同改）
 
+## 2026-07-22: script/ 双击安装入口（UAC 提权）
+
+### 事由
+要上传 git，希望别人 clone 后能双击装服务，不必开 PowerShell 敲 `.\service.ps1 install`。
+
+### 做了什么
+- `script/install-proxy.bat` + `install-proxy.ps1`：双击 → ps1 自动 UAC 提权 → 调根目录 `service.ps1 install`
+- `script/uninstall-proxy.bat` + `uninstall-proxy.ps1`：同模式调 `uninstall`
+- ps1 设 `chcp 65001` + `OutputEncoding=UTF8`，提权窗口中文不乱码
+
+### 注意
+- 编码细节：**ps1 存 UTF-8 BOM**（PS 5.1 才能正确读中文字符串/注释）；**bat 纯 ASCII 无 BOM**（cmd 对 BOM 容忍差，首行 `@echo off` 前若有 BOM 会出错）
+- 仅 Win；bat 调 `powershell`（5.1，系统自带），不依赖 pwsh 7
+- `status` 无双击脚本（只读不需提权，直接 `.\service.ps1 status`）
+- ps1 用 `$MyInvocation.MyCommand.Path` 定位自己 → 算根目录 → 找 `service.ps1`，不依赖 cwd（提权后 cwd 是 system32 也能工作）
+
 ## 2026-07-22: 配置抽象到 .env，消除 service.ps1 envVars 坑
 
 ### 事由
