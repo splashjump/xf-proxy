@@ -4,28 +4,46 @@
 # 用法（install/uninstall 需管理员，status 不需要）：
 #   .\service.ps1 install     安装/刷新服务
 #   .\service.ps1 uninstall   卸载服务
-#   .\service.ps1 status       查看服务状态 + 最近 stderr
+#   .\service.ps1 status      查看服务状态 + 最近 stderr
+#
+# 配置来源：根目录 .env（SVC_NAME / NODE_EXE / PROXY_PORT）
+#   代理自身的运行参数（API Key、重试、日志等）也写在 .env，
+#   xunfei-proxy.js 启动时自动读取，本脚本无需、也不应再 nssm set AppEnvironmentExtra。
+#   因此：改 .env 后只需 Restart-Service 即可生效（无需重新 install）。
 
 param([Parameter(Position=0)][ValidateSet('install','uninstall','status')]$Action='status')
 
 $ErrorActionPreference = 'Stop'
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $nssm = Join-Path $dir "bin\nssm.exe"
-$svcName = "xf-proxy"
 
-# ── 配置（与 start-proxy.ps1 的 $envVars 保持一致） ──
-$nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source
-if (-not $nodeExe) { $nodeExe = "C:\nvm4w\nodejs\node.exe" }   # 换机器时改这里
+# ── 读取 .env（取本脚本需要的 SVC_NAME / NODE_EXE / PROXY_PORT）──
+function Get-EnvVar($key, $default) {
+  $envFile = Join-Path $dir ".env"
+  if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+      $t = $line.Trim()
+      if (-not $t -or $t.StartsWith("#")) { continue }
+      $eq = $t.IndexOf("=")
+      if ($eq -lt 0) { continue }
+      $k = $t.Substring(0, $eq).Trim()
+      if ($k -eq $key) {
+        $v = $t.Substring($eq + 1).Trim()
+        $q = $v[0]
+        if (($q -eq '"' -or $q -eq "'") -and $v[-1] -eq $q) { $v = $v.Substring(1, $v.Length - 2) }
+        return $v
+      }
+    }
+  }
+  return $default
+}
+
+$svcName = Get-EnvVar "SVC_NAME" "xf-proxy"
+$nodeExe = Get-EnvVar "NODE_EXE" ""
+if (-not $nodeExe) { $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source }
+if (-not $nodeExe) { $nodeExe = "C:\nvm4w\nodejs\node.exe" }   # 兜底：服务机器上 node 不在系统 PATH
+$port = Get-EnvVar "PROXY_PORT" "3000"
 $script = Join-Path $dir "xunfei-proxy.js"
-$envVars = @(
-  "XFYUN_API_KEY=***REMOVED***",
-  "PROXY_PORT=3000",
-  "LOG_LEVEL=none",
-  "RETRY_DELAY_MS=500",
-  "MAX_RETRIES=50",
-  "COOLDOWN_AFTER=10",
-  "COOLDOWN_MS=5000"
-)
 $logDir = Join-Path $dir "logs"
 $stdoutLog = Join-Path $logDir "proxy-stdout.log"
 $stderrLog = Join-Path $logDir "proxy-stderr.log"
@@ -47,8 +65,9 @@ switch ($Action) {
     if (-not (Test-Admin)) { Write-Host "需要管理员权限，请右键 PowerShell 以管理员身份运行" -ForegroundColor Red; exit 1 }
     if (-not (Test-Path $nssm))  { Write-Host "找不到 nssm: $nssm" -ForegroundColor Red; exit 1 }
     if (-not (Test-Path $script)){ Write-Host "找不到代理脚本: $script" -ForegroundColor Red; exit 1 }
+    if (-not (Test-Path (Join-Path $dir ".env"))) { Write-Host "找不到 .env：请从 .env.example 复制并填入 XFYUN_API_KEY" -ForegroundColor Red; exit 1 }
 
-    Write-Host "1) 停掉旧方式启动的代理（释放端口 3000）..." -ForegroundColor Cyan
+    Write-Host "1) 停掉旧方式启动的代理（释放端口 $port）..." -ForegroundColor Cyan
     Stop-ExistingProxy | Out-Null
     Start-Sleep -Seconds 1
 
@@ -64,7 +83,8 @@ switch ($Action) {
     & $nssm install $svcName $nodeExe $script
 
     & $nssm set $svcName AppDirectory $dir | Out-Null
-    & $nssm set $svcName AppEnvironmentExtra @envVars | Out-Null
+    # 不再 nssm set AppEnvironmentExtra：代理运行参数由 .env 提供，node 启动时自行读取。
+    # 好处：改 .env 后 Restart-Service 即生效，无需重新 install。
     & $nssm set $svcName AppStdout  $stdoutLog | Out-Null
     & $nssm set $svcName AppStderr  $stderrLog | Out-Null
     & $nssm set $svcName AppRotateFiles 1 | Out-Null
@@ -84,7 +104,7 @@ switch ($Action) {
 
     Write-Host "5) 验证 ..." -ForegroundColor Cyan
     try {
-      $h = Invoke-RestMethod http://127.0.0.1:3000/health -TimeoutSec 5
+      $h = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5
       Write-Host "✓ 服务运行中，health = $($h.status)" -ForegroundColor Green
     } catch {
       Write-Host "✗ health 检查失败: $($_.Exception.Message)" -ForegroundColor Red
@@ -105,6 +125,7 @@ switch ($Action) {
     Write-Host "  重启:  Restart-Service $svcName     (systemctl restart)"
     Write-Host "  卸载:  .\service.ps1 uninstall"
     Write-Host "  日志:  Get-Content $stderrLog -Tail 30 -Wait"
+    Write-Host "`n  改配置: 编辑 .env 后 Restart-Service $svcName 即可生效" -ForegroundColor DarkGray
   }
 
   'uninstall' {

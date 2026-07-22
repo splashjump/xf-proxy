@@ -8,13 +8,42 @@
 OpenCode  →  localhost:3000/v1  →  xunfei-proxy(重试)  →  讯飞星辰 v2 API
 ```
 
+## 配置
+
+所有配置集中在根目录 **`.env`**（从 `.env.example` 复制，填入真实值；`.env` 不提交 git）。`xunfei-proxy.js` 启动时自动加载，不覆盖已存在的环境变量。
+
+| 变量 | 说明 | 默认 |
+|------|------|------|
+| `XFYUN_API_KEY` | 讯飞 API Key（必填） | — |
+| `XFYUN_BASE_URL` | 上游地址 | `https://maas-coding-api.cn-huabei-1.xf-yun.com/v2` |
+| `PROXY_PORT` | 监听端口 | `3000` |
+| `RETRY_DELAY_MS` | 固定重试间隔 ms | `500` |
+| `MAX_RETRIES` | 最大重试次数 | `50` |
+| `COOLDOWN_AFTER` | 连续失败多少次触发冷却 | `10` |
+| `COOLDOWN_MS` | 冷却时长 ms | `5000` |
+| `LOG_LEVEL` | `none` / `simple` / `full` | `none` |
+| `EVENT_LOG_MAX_LINES` | 结构化事件日志滚动行数 | `1000` |
+| `LOG_DIR` | 日志目录 | `<脚本目录>/logs` |
+| `SVC_NAME` | Windows 服务名（service.ps1 用） | `xf-proxy` |
+| `NODE_EXE` | node 绝对路径（留空用 PATH） | — |
+| `PROBE_MODEL` | 探针脚本默认模型 | `xopglm52` |
+
 ## 运行方式
 
-通过 **nssm** 注册为 Windows 系统服务（`xf-proxy`）：
+通过 **nssm** 注册为 Windows 系统服务（默认名 `xf-proxy`）：
 
 - 开机自启（`SERVICE_AUTO_START`）
 - 进程崩溃自动重启（nssm `AppExit` 2s + Windows SCM `sc failure` 5/10/30s 兜底）
 - 不依赖登录会话（用户没登录也在跑）
+
+```powershell
+# 首次：从模板创建 .env 并填入 API Key
+Copy-Item .env.example .env
+notepad .env
+
+# 以管理员安装服务
+.\service.ps1 install
+```
 
 ## 重试策略
 
@@ -31,17 +60,17 @@ OpenCode  →  localhost:3000/v1  →  xunfei-proxy(重试)  →  讯飞星辰 v
 
 | 操作 | 命令 |
 |------|------|
-| 启动 | 双击 `start-proxy.bat`，或 `Start-Service xf-proxy`（管理员） |
-| 停止 | 双击 `stop-proxy.bat`，或 `Stop-Service xf-proxy`（管理员） |
+| 启动 | `.\start-proxy.ps1`，或 `Start-Service xf-proxy`（管理员） |
+| 停止 | `.\stop-proxy.ps1`，或 `Stop-Service xf-proxy`（管理员） |
 | 重启 | `Restart-Service xf-proxy`（管理员） |
 | 状态 | `Get-Service xf-proxy` 或 `.\service.ps1 status` |
 | 安装/刷新 | `.\service.ps1 install`（管理员） |
 | 卸载 | `.\service.ps1 uninstall`（管理员） |
 | 健康检查 | `Invoke-RestMethod http://127.0.0.1:3000/health` |
 
-`start-proxy.bat` / `stop-proxy.bat` 是 `Start-Service` / `Stop-Service` 的封装，双击会自动 UAC 提权。**平时无需手动启动**：服务已设开机自启 + 崩溃重启。
+**平时无需手动启动**：服务已设开机自启 + 崩溃重启。
 
-> 修改代理代码或环境变量后，必须运行 `.\service.ps1 install` 重新安装服务才生效（普通 `Restart-Service` 只重启进程，不会重新写入 nssm 的环境变量）。
+> 改 `.env` 后只需 `Restart-Service` 即可生效（node 重启时自行读取 `.env`，无需重新 `install`）。仅当改了 nssm 层配置（服务名、node 路径、日志重定向）才需重新 `.\service.ps1 install`。
 
 ## 验证
 
@@ -52,51 +81,35 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 
 ## 日志
 
-三级可配日志，通过 `service.ps1` 中 `$envVars` 的 `LOG_LEVEL` 控制：
+三级可配日志，通过 `.env` 的 `LOG_LEVEL` 控制：
 
 | 级别 | 说明 |
 |------|------|
-| `none` | 无 stderr 输出（结构 `proxy-events.jsonl` 始终写入） |
-| `simple`（默认） | 重试/错误信息写 stderr（nssm → `proxy-stderr.log`）+ 结构化事件 |
+| `none` | 无 stderr 输出（结构化 `proxy-events.jsonl` 始终写入） |
+| `simple` | 重试/错误信息写 stderr（nssm → `proxy-stderr.log`）+ 结构化事件 |
 | `full` | 在 simple 基础上，将**完整请求/响应内容**写入 `logs\proxy.log` |
 
-**结构化事件日志** `logs\proxy-events.jsonl`（始终写入，滚动 1000 行，通过 `EVENT_LOG_MAX_LINES` env 调节）供 pi 扩展 `xf-proxy-status` 读取，在 pi footer 实时显示代理状态。
+**结构化事件日志** `logs\proxy-events.jsonl`（始终写入，滚动 1000 行，通过 `EVENT_LOG_MAX_LINES` 调节）供 pi 扩展 `xf-proxy-status` 读取，在 pi footer 实时显示代理状态。
 
 ```powershell
 # 实时跟随（结构化，供机器读取）
-Get-Content D:\xf-proxy\logs\proxy-events.jsonl -Wait -Tail 20 -Encoding UTF8
+Get-Content logs\proxy-events.jsonl -Wait -Tail 20 -Encoding UTF8
 
 # 实时跟随（可读 stderr）
-Get-Content D:\xf-proxy\logs\proxy-stderr.log -Wait -Tail 20 -Encoding UTF8
+Get-Content logs\proxy-stderr.log -Wait -Tail 20 -Encoding UTF8
 
 # 最近 50 行结构化事件
-Get-Content D:\xf-proxy\logs\proxy-events.jsonl -Tail 50 -Encoding UTF8
+Get-Content logs\proxy-events.jsonl -Tail 50 -Encoding UTF8
 
 # nssm 重定向的 stderr（V8 致命错误如 OOM，不走 uncaughtException）
-Get-Content D:\xf-proxy\logs\proxy-stderr.log -Tail 30
+Get-Content logs\proxy-stderr.log -Tail 30
 ```
 
-> 注意：`full` 级会记录完整请求/响应明文，包括对话内容。仅用于调试，排查完建议切回 `simple`。
-
-## 自定义参数
-
-编辑 `service.ps1` 中的 `$envVars` 块，改后运行 `.\service.ps1 install` 重新安装服务生效：
-
-```powershell
-$envVars = @(
-  "XFYUN_API_KEY=...",         # 讯飞 API Key
-  "PROXY_PORT=3000",            # 监听端口
-  "LOG_LEVEL=simple",           # none / simple / full
-  "RETRY_DELAY_MS=500",         # 重试间隔
-  "MAX_RETRIES=50",             # 重试上限
-  "COOLDOWN_AFTER=10",          # 连续失败多少次触发冷却
-  "COOLDOWN_MS=5000"           # 冷却时长
-)
-```
+> 注意：`full` 级会记录完整请求/响应明文，包括对话内容。仅用于调试，排查完建议切回 `none`/`simple`。
 
 ## OpenCode 配置
 
-`C:\Users\admin\.config\opencode\opencode.jsonc`:
+`C:\Users\<user>\.config\opencode\opencode.jsonc`:
 
 ```json
 "options": {
@@ -109,12 +122,13 @@ $envVars = @(
 
 | 文件 | 路径 |
 |------|------|
-| 代理脚本 | `D:\xf-proxy\xunfei-proxy.js` |
-| 服务管理脚本 | `D:\xf-proxy\service.ps1`（install / uninstall / status） |
-| 启动封装 | `D:\xf-proxy\start-proxy.ps1`（+ `start-proxy.bat`） |
-| 停止封装 | `D:\xf-proxy\stop-proxy.ps1`（+ `stop-proxy.bat`） |
-| nssm.exe | `D:\xf-proxy\bin\nssm.exe` |
-| API Key | 写在 `service.ps1` 的 `$envVars` 中 |
-| 事件日志 | `D:\xf-proxy\logs\proxy-events.jsonl`（结构化，供 pi 扩展读取） |
-| stderr 日志 | `D:\xf-proxy\logs\proxy-stderr.log`（可读行，nssm 重定向） |
-| full 日志 | `D:\xf-proxy\logs\proxy.log`（仅 full 级） |
+| 代理脚本 | `xunfei-proxy.js` |
+| 配置 | `.env`（从 `.env.example` 复制，不提交 git） |
+| 服务管理脚本 | `service.ps1`（install / uninstall / status） |
+| 启动封装 | `start-proxy.ps1` |
+| 停止封装 | `stop-proxy.ps1` |
+| nssm.exe | `bin\nssm.exe` |
+| 事件日志 | `logs\proxy-events.jsonl`（结构化，供 pi 扩展读取） |
+| stderr 日志 | `logs\proxy-stderr.log`（可读行，nssm 重定向） |
+| full 日志 | `logs\proxy.log`（仅 full 级） |
+| 探针脚本 | `xf-test\probe-*.js` |

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // 上下文窗口探针 v2 — 逐档独立、即时输出、失败继续
 "use strict";
-const PROXY = "http://127.0.0.1:3000/v1/chat/completions";
+const PORT = process.env.PROXY_PORT || "3000";
+const PROXY = `http://127.0.0.1:${PORT}/v1/chat/completions`;
 const MODEL = process.env.PROBE_MODEL || "xopglm52";
 const PAD = "本段是上下文窗口测试填充文本用于观察模型在何种输入规模下开始丢失早期内容，请忽略其语义只关注其中标注的关键信息。";
 const SEG_LEN = PAD.length + 12;

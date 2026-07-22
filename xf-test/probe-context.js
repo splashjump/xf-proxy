@@ -13,7 +13,8 @@
  */
 "use strict";
 
-const PROXY = "http://127.0.0.1:3000/v1/chat/completions";
+const PORT = process.env.PROXY_PORT || "3000";
+const PROXY = `http://127.0.0.1:${PORT}/v1/chat/completions`;
 const MODEL = process.env.PROBE_MODEL || "xopglm52";
 
 // 目标发送字符数（中文为主，约 1 token ≈ 2.5~3 字符）

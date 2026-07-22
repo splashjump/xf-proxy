@@ -21,6 +21,8 @@
  *   LOG_DIR              日志输出目录（默认 <脚本目录>/logs）
  *   EVENT_LOG_MAX_LINES 结构化事件日志滚动行数（默认 1000）
  *
+ *   以上变量也可写入根目录 .env，启动时自动加载（不覆盖已存在的环境变量）。
+ *
  * 日志产物：
  *   logs/proxy-events.jsonl  结构化事件（始终写，滚动；供 pi 扩展读取）
  *   logs/proxy-stderr.log   可读 stderr（nssm 重定向；simple/full 级）
@@ -31,6 +33,24 @@
 
 const path = require("path");
 const fs = require("fs");
+
+// ── .env 加载（零依赖，不覆盖已存在的环境变量）──────────
+//   开发模式 `node xunfei-proxy.js` 与 nssm 服务（AppDirectory=项目目录）均自动读取。
+try {
+  for (const _raw of fs.readFileSync(path.join(__dirname, ".env"), "utf8").split(/\r?\n/)) {
+    const _line = _raw.trim();
+    if (!_line || _line.startsWith("#")) continue;
+    const _eq = _line.indexOf("=");
+    if (_eq < 0) continue;
+    const _k = _line.slice(0, _eq).trim();
+    let _v = _line.slice(_eq + 1).trim();
+    const _q = _v[0];
+    if ((_q === '"' || _q === "'") && _v[_v.length - 1] === _q) _v = _v.slice(1, -1);
+    if (!(_k in process.env)) process.env[_k] = _v;
+  }
+} catch {
+  // .env 不存在或不可读：依赖外部环境变量
+}
 
 // ── 配置 ──────────────────────────────────────────────
 const PORT = parseInt(process.env.PROXY_PORT || "3000", 10);

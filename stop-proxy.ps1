@@ -1,8 +1,29 @@
 ﻿# xf-proxy 停止脚本（通过 nssm 服务）
-# 双击 stop-proxy.bat 调用，自动 UAC 提权后停止 xf-proxy 服务
+# 双击或命令行调用，自动 UAC 提权后停止 xf-proxy 服务
 
 $ErrorActionPreference = "Stop"
-$svcName = "xf-proxy"
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# 从 .env 读服务名
+function Get-EnvVar($key, $default) {
+  $envFile = Join-Path $dir ".env"
+  if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+      $t = $line.Trim()
+      if (-not $t -or $t.StartsWith("#")) { continue }
+      $eq = $t.IndexOf("=")
+      if ($eq -lt 0) { continue }
+      if ($t.Substring(0, $eq).Trim() -eq $key) {
+        $v = $t.Substring($eq + 1).Trim()
+        $q = $v[0]
+        if (($q -eq '"' -or $q -eq "'") -and $v[-1] -eq $q) { $v = $v.Substring(1, $v.Length - 2) }
+        return $v
+      }
+    }
+  }
+  return $default
+}
+$svcName = Get-EnvVar "SVC_NAME" "xf-proxy"
 
 # 自动 UAC 提权（Stop-Service 需要管理员）
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -20,13 +41,13 @@ if (-not $svc) {
 }
 
 if ($svc.Status -ne "Running") {
-    Write-Host "xf-proxy 服务未在运行" -ForegroundColor Green
+    Write-Host "$svcName 服务未在运行" -ForegroundColor Green
     pause
     exit 0
 }
 
-Write-Host "停止 xf-proxy 服务 ..." -ForegroundColor Cyan
+Write-Host "停止 $svcName 服务 ..." -ForegroundColor Cyan
 Stop-Service -Name $svcName -Force
 Start-Sleep -Seconds 1
-Write-Host "✓ 已停止 xf-proxy 服务" -ForegroundColor Green
+Write-Host "✓ 已停止 $svcName 服务" -ForegroundColor Green
 pause

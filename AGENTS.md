@@ -54,6 +54,29 @@
 - 扩展已转为**全局**：`~/.pi/agent/extensions/xf-proxy-status.ts`，所有项目都能用；默认日志路径硬编码 `T:/xf-proxy/logs/proxy-events.jsonl`（项目从 D 盘迁到 T 盘时同步改过，曾因路径没跟手导致插件不生效），可通过 `XF_PROXY_LOG` 环境变量覆盖
 - 冷却时长 2026-07-22 从 10s 调为 5s（代码默认 + `service.ps1` envVars 同改）
 
+## 2026-07-22: 配置抽象到 .env，消除 service.ps1 envVars 坑
+
+### 事由
+准备把项目上传到 git，需把敏感信息（API Key）、环境信息（node 路径）、配置信息（端口/重试/日志）从代码里抽出来。同时彻底解决 2026-07-19 记录的「改 service.ps1 envVars 不生效」坑。
+
+### 做了什么
+- 新增 `.env`（gitignore）+ `.env.example`（提交模板），集中所有配置：`XFYUN_API_KEY` / `XFYUN_BASE_URL` / `PROXY_PORT` / 重试参数 / `LOG_LEVEL` / `SVC_NAME` / `NODE_EXE` / `PROBE_MODEL`
+- `xunfei-proxy.js` 头部加零依赖 `.env` loader（不覆盖已存在的环境变量）：开发 `node xunfei-proxy.js` 与 nssm 服务（`AppDirectory=项目目录`）都自动读取
+- `service.ps1` **移除 `nssm set AppEnvironmentExtra`**：代理运行参数改由 node 自行读 `.env`，nssm 只管进程/日志/重启策略。脚本自身仅从 `.env` 读 `SVC_NAME`/`NODE_EXE`/`PROXY_PORT`
+- `start-proxy.ps1` / `stop-proxy.ps1` 同步从 `.env` 读 `SVC_NAME`/`PROXY_PORT`，并修掉旧版 `D:\xf-proxy\logs\...` 硬编码路径 bug（改用脚本所在目录）
+- `xf-test/probe-*.js` 端口改读 `PROXY_PORT`、模型改读 `PROBE_MODEL`（默认 `xopglm52`）
+- 使用说明.md 全文 `D:\xf-proxy\` 硬编码路径改为相对路径，「自定义参数」一节改为 `.env` 配置表
+
+### 关键改进：改配置不再需要 install
+- 旧流程：改 `service.ps1` 的 `$envVars` → 必须 `install`（因 nssm 注册表存的是旧值，`Restart-Service` 不刷新）
+- 新流程：改 `.env` → `Restart-Service` 即生效（node 重启时自己读 `.env`）
+- 仅当改了 nssm 层配置（服务名、node 路径、日志重定向路径）才需重新 `install`
+
+### 注意
+- `.env` 已加入 `.gitignore`，不会上传；`.env.example` 是模板（API Key 留空）
+- nssm 的 `AppDirectory` 必须设为项目目录，否则 node 找不到 `.env`（`service.ps1 install` 已保证）
+- clone 后的流程：`Copy-Item .env.example .env` → 填 `XFYUN_API_KEY` → `service.ps1 install`
+
 ## 2026-07-22: 代理透传上游 usage 事件，诊断 cache 虚高
 
 ### 事由

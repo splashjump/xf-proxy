@@ -1,9 +1,31 @@
 ﻿# xf-proxy 启动脚本（通过 nssm 服务）
-# 双击 start-proxy.bat 调用，自动 UAC 提权后启动 xf-proxy 服务
+# 双击或命令行调用，自动 UAC 提权后启动 xf-proxy 服务
 # 平时无需手动启动：nssm 服务已设置开机自启 + 崩溃自动重启
 
 $ErrorActionPreference = "Stop"
-$svcName = "xf-proxy"
+$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# 从 .env 读服务名与端口
+function Get-EnvVar($key, $default) {
+  $envFile = Join-Path $dir ".env"
+  if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+      $t = $line.Trim()
+      if (-not $t -or $t.StartsWith("#")) { continue }
+      $eq = $t.IndexOf("=")
+      if ($eq -lt 0) { continue }
+      if ($t.Substring(0, $eq).Trim() -eq $key) {
+        $v = $t.Substring($eq + 1).Trim()
+        $q = $v[0]
+        if (($q -eq '"' -or $q -eq "'") -and $v[-1] -eq $q) { $v = $v.Substring(1, $v.Length - 2) }
+        return $v
+      }
+    }
+  }
+  return $default
+}
+$svcName = Get-EnvVar "SVC_NAME" "xf-proxy"
+$port = Get-EnvVar "PROXY_PORT" "3000"
 
 # 自动 UAC 提权（Start-Service 需要管理员）
 $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -21,20 +43,20 @@ if (-not $svc) {
 }
 
 if ($svc.Status -eq "Running") {
-    Write-Host "xf-proxy 服务已在运行" -ForegroundColor Green
+    Write-Host "$svcName 服务已在运行" -ForegroundColor Green
     pause
     exit 0
 }
 
-Write-Host "启动 xf-proxy 服务 ..." -ForegroundColor Cyan
+Write-Host "启动 $svcName 服务 ..." -ForegroundColor Cyan
 Start-Service -Name $svcName
 Start-Sleep -Seconds 2
 
 try {
-    $h = Invoke-RestMethod http://127.0.0.1:3000/health -TimeoutSec 5
+    $h = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5
     Write-Host "✓ 服务运行中，health = $($h.status)" -ForegroundColor Green
 } catch {
     Write-Host "✗ health 检查失败: $($_.Exception.Message)" -ForegroundColor Red
-    Write-Host "  排查: Get-Content D:\xf-proxy\logs\proxy-stderr.log -Tail 30" -ForegroundColor Yellow
+    Write-Host "  排查: Get-Content $dir\logs\proxy-stderr.log -Tail 30" -ForegroundColor Yellow
 }
 pause

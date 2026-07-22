@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // 验证讯飞 prompt cache 的 usage 语义：连发相同请求，看 cached 增长时 total 如何变化
 "use strict";
-const PROXY = "http://127.0.0.1:3000/v1/chat/completions";
-const MODEL = "xopglm52";
+const PORT = process.env.PROXY_PORT || "3000";
+const PROXY = `http://127.0.0.1:${PORT}/v1/chat/completions`;
+const MODEL = process.env.PROBE_MODEL || "xopglm52";
 const PAD = "本段是上下文窗口测试填充文本用于观察模型在何种输入规模下开始丢失早期内容，请忽略其语义只关注其中标注的关键信息。";
 
 // 中等大小，足以触发缓存
