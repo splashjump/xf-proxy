@@ -13,7 +13,7 @@
  * setStatus 会自动 requestRender；idle 时状态文本完全稳定，不触发重绘，不抢输入。
  *
  * 配置（环境变量，均可选）：
- *   XF_PROXY_LOG   结构化事件日志路径（默认 T:\xf-proxy\logs\proxy-events.jsonl）
+ *   XF_PROXY_LOG   日志路径 override（留空则自动从代理 /health 拿，跟随代理 LOG_DIR）
  *   XF_PROXY_PORT  代理健康检查端口（默认 3000，每 10s 探活一次 /health）
  *
  * 命令：
@@ -69,6 +69,8 @@ interface Runtime {
 	statusText: string; // 去重：仅在变化时 setStatus
 	widgetOn: boolean;
 	widgetLines: number;
+	logPath: string; // 当前 LogTailer 实际使用的路径（""=尚未拿到）
+	healthLogPath: string; // /health 最近一次上报的日志路径（待 poll 消费）
 }
 
 function freshRuntime(): Runtime {
@@ -80,6 +82,8 @@ function freshRuntime(): Runtime {
 		statusText: "",
 		widgetOn: false,
 		widgetLines: DEFAULT_WIDGET_LINES,
+		logPath: "",
+		healthLogPath: "",
 	};
 }
 
@@ -379,7 +383,7 @@ export default function (pi: ExtensionAPI) {
 	let tailer: LogTailer | undefined;
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let ui: ExtensionUIContext | undefined;
-	let logPath = "";
+	let logOverride = "";
 	let healthPort = 3000;
 	let lastHealthCheck = 0;
 
@@ -390,6 +394,15 @@ export default function (pi: ExtensionAPI) {
 			const resp = await fetch(`http://127.0.0.1:${healthPort}/health`, { signal: ctrl.signal });
 			const alive = resp.ok;
 			if (alive !== rt.proxyAlive) rt.proxyAlive = alive;
+			// 代理自报日志路径（方案 C）：暂存到 healthLogPath，由 poll 同步消费重建 tailer
+			if (alive) {
+				try {
+					const data = (await resp.json()) as { logPath?: string };
+					if (data && typeof data.logPath === "string" && data.logPath) {
+						rt.healthLogPath = data.logPath;
+					}
+				} catch {}
+			}
 		} catch {
 			if (rt.proxyAlive) rt.proxyAlive = false;
 		} finally {
@@ -398,19 +411,42 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	const poll = () => {
-		if (!tailer || !ui) return;
+		if (!ui) return;
 		const now = Date.now();
 		let changed = false;
-		const lines = tailer.readNew();
-		for (const l of lines) {
-			const ev = parseEvent(l);
-			if (ev) {
-				if (!applyEvent(ev, rt)) continue; // 非本会话事件：不影响状态，不刷 widget
-			} else {
-				if (rt.rawLines.length >= KEEP_RAW_LINES) rt.rawLines.shift();
-				rt.rawLines.push(l);
+
+		// 路径切换：checkHealth 异步上报了 healthLogPath，这里同步重建 tailer
+		// （override 模式下跳过，以 XF_PROXY_LOG 为准）
+		if (!logOverride && rt.healthLogPath && rt.healthLogPath !== rt.logPath) {
+			rt.logPath = rt.healthLogPath;
+			tailer = rt.logPath ? new LogTailer(rt.logPath) : undefined;
+			// 清空旧路径残留，避免混入
+			rt.rawLines = [];
+			rt.stack = [];
+			rt.terminal = undefined;
+			rt.active = undefined;
+			if (tailer) {
+				const ls = tailer.readNew();
+				for (const l of ls) {
+					const ev = parseEvent(l);
+					if (ev) applyEvent(ev, rt);
+				}
 			}
 			changed = true;
+		}
+
+		if (tailer) {
+			const lines = tailer.readNew();
+			for (const l of lines) {
+				const ev = parseEvent(l);
+				if (ev) {
+					if (!applyEvent(ev, rt)) continue; // 非本会话事件：不影响状态，不刷 widget
+				} else {
+					if (rt.rawLines.length >= KEEP_RAW_LINES) rt.rawLines.shift();
+					rt.rawLines.push(l);
+				}
+				changed = true;
+			}
 		}
 
 		if (rt.widgetOn && ui && changed) {
@@ -434,16 +470,21 @@ export default function (pi: ExtensionAPI) {
 	function startup(ctx: ExtensionContext) {
 		const portFromEnv = parseInt(process.env.XF_PROXY_PORT || "3000", 10);
 		healthPort = Number.isNaN(portFromEnv) ? 3000 : portFromEnv;
-		logPath = process.env.XF_PROXY_LOG || "T:/xf-proxy/logs/proxy-events.jsonl";
+		// override 模式：XF_PROXY_LOG 有值则用它且不再跟随 /health；否则等 health 上报
+		logOverride = process.env.XF_PROXY_LOG || "";
 
 		rt = freshRuntime();
 		rt.sid = ctx.sessionManager.getSessionId();
-		tailer = new LogTailer(logPath);
-		// 回放现有文件
-		const lines = tailer.readNew();
-		for (const l of lines) {
-			const ev = parseEvent(l);
-			if (ev) applyEvent(ev, rt);
+		if (logOverride) {
+			rt.logPath = logOverride;
+			tailer = new LogTailer(logOverride);
+			const lines = tailer.readNew();
+			for (const l of lines) {
+				const ev = parseEvent(l);
+				if (ev) applyEvent(ev, rt);
+			}
+		} else {
+			tailer = undefined; // 等 poll 的 health 拿到 logPath 后重建
 		}
 
 		ui = ctx.ui;
@@ -453,7 +494,8 @@ export default function (pi: ExtensionAPI) {
 
 		if (timer) clearInterval(timer);
 		timer = setInterval(poll, POLL_MS);
-		lastHealthCheck = 0;
+		lastHealthCheck = 0; // 首次 poll 立即触发 health
+		void checkHealth(); // 不等 500ms，立刻拉一次拿 logPath
 	}
 
 	function shutdown(ctx: ExtensionContext) {

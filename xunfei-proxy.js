@@ -450,7 +450,8 @@ const server = http.createServer(async (req, res) => {
   // 健康检查
   if (path === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ status: "ok" }));
+    // 自报日志路径，供 pi 扩展发现（方案 C：代理是日志路径的唯一权威）
+    res.end(JSON.stringify({ status: "ok", logPath: LOG_EVENTS_FILE }));
     return;
   }
 
