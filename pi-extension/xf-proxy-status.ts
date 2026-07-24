@@ -255,7 +255,7 @@ function renderStack(theme: Theme, stack: StackItem[], failColor: ThemeColor): s
 	return s;
 }
 
-function buildStatusText(theme: Theme, rt: Runtime, now: number): string {
+function buildStatusBody(theme: Theme, rt: Runtime, now: number): string {
 	// 代理停止：最高优先级
 	if (!rt.proxyAlive) {
 		return theme.fg("error", "⚠ 代理已停止");
@@ -303,6 +303,11 @@ function buildStatusText(theme: Theme, rt: Runtime, now: number): string {
 			// ✗ 串不动，转 dim
 			return renderStack(theme, rt.stack, "dim");
 	}
+}
+
+/** 持久前缀 xf: 表示信息来自 xf 代理。 */
+function buildStatusText(theme: Theme, rt: Runtime, now: number): string {
+	return theme.fg("accent", "xf:") + " " + buildStatusBody(theme, rt, now);
 }
 
 // ── Widget（最近日志行）──────────────────────────────────
