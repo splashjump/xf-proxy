@@ -2,7 +2,7 @@
 /**
  * xunfei-proxy — 讯飞星辰 API 本地代理（自定义重试策略）
  *
- * 策略：固定 0.5s + 抖动，每 10 次连续失败冷却 10s，上限 50 次，成功刷新计数
+ * 策略：固定 0.5s + 抖动，每 10 次连续失败冷却 5s，上限 50 次，成功刷新计数
  *
  * 用法:
  *   XFYUN_API_KEY="your-key" node xunfei-proxy.js
@@ -16,8 +16,8 @@
  *   RETRY_DELAY_MS       固定重试间隔 ms（默认 500）
  *   MAX_RETRIES          最大重试次数（默认 50）
  *   COOLDOWN_AFTER       连续失败多少次触发冷却（默认 10）
- *   COOLDOWN_MS          冷却时长 ms（默认 10000）
- *   LOG_LEVEL            可读 stderr 级别: none / simple / full（默认 simple）
+ *   COOLDOWN_MS          冷却时长 ms（默认 5000）
+ *   LOG_LEVEL            可读日志级别: none / simple / full（默认 simple；simple/full 级按事件类型分流 stdout/stderr，见 emit()）
  *   LOG_DIR              日志输出目录（默认 <脚本目录>/logs）
  *   EVENT_LOG_MAX_LINES 结构化事件日志滚动行数（默认 1000）
  *
@@ -25,7 +25,8 @@
  *
  * 日志产物：
  *   logs/proxy-events.jsonl  结构化事件（始终写，滚动；供 pi 扩展读取）
- *   logs/proxy-stderr.log   可读 stderr（nssm 重定向；simple/full 级）
+ *   logs/proxy-stdout.log   可读运行日志（nssm 重定向 stdout；simple/full 级，含启动/重试/成功等）
+ *   logs/proxy-stderr.log   可读错误日志（nssm 重定向 stderr；simple/full 级，仅 failed/fatal）
  *   logs/proxy.log          full 级完整请求/响应明文
  */
 
@@ -72,7 +73,7 @@ const reqSidMap = new Map();
 
 // ── 日志配置 ──────────────────────────────────────────
 //   none   — 不输出任何日志
-//   simple — stderr 输出重试/错误信息（默认）
+//   simple — 可读日志分流输出（默认）：正常事件→stdout，failed/fatal→stderr
 //   full   — 在 simple 基础上，将完整请求/响应内容写入日志文件
 const LOG_LEVELS = { none: 0, simple: 1, full: 2 };
 const LOG_LEVEL = LOG_LEVELS[String(process.env.LOG_LEVEL || "simple").toLowerCase()] ?? 1;
@@ -115,7 +116,9 @@ function _appendEventLine(line) {
   }
 }
 
-/** 发出一个结构化事件：写 JSONL（始终）+ 可读 stderr 行（simple/full 级）。 readable 留空则只写结构化日志。 */
+/** 发出一个结构化事件：写 JSONL（始终）+ 可读 stdout/stderr 行（simple/full 级）。
+ *  readable 留空则只写结构化日志；否则按 type 分流：
+ *  failed / fatal → stderr（真实失败），其余 → stdout（正常运行事件）。 */
 function emit(type, fields = {}, readable) {
   const obj = { t: type, ts: Date.now(), ...fields };
   // 来自 pi 的请求（req_start 时已登记 sid）自动标注来源与终端标识
@@ -126,7 +129,9 @@ function emit(type, fields = {}, readable) {
   }
   _appendEventLine(JSON.stringify(obj));
   if (readable && LOG_LEVEL >= 1) {
-    console.error(`[${_ts()}] ${readable}`);
+    const line = `[${_ts()}] ${readable}`;
+    if (type === "failed" || type === "fatal") console.error(line);
+    else console.log(line);
   }
 }
 
@@ -297,10 +302,24 @@ async function fetchWithRetry(url, init, isStream, reqId, clientSignal) {
 }
 
 // ── 请求体读取 ────────────────────────────────────────
+// 请求体大小上限：远大于最大探针(~1.5MB)，防御性加固（监听本地，风险低）
+const MAX_BODY_BYTES = 50 * 1024 * 1024;
 function readRequestBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on("data", (c) => chunks.push(c));
+    let size = 0;
+    let tooLarge = false;
+    req.on("data", (c) => {
+      if (tooLarge) return;
+      size += c.length;
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true;
+        reject(new Error("request body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
     req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
@@ -308,17 +327,22 @@ function readRequestBody(req) {
 
 // ── 注入 enable_thinking ───────────────────────────────
 // 讯飞模型默认不开启思考，在请求体缺失 enable_thinking 时自动补入
+// 返回 { buffer, injected, enableThinking }：
+//   injected       — 是否补入（请求体原缺失 enable_thinking）
+//   enableThinking — 最终生效的 enable_thinking 值（原值或注入后的 true）
 function injectThinking(bodyBuffer) {
   try {
     const body = JSON.parse(bodyBuffer.toString("utf8"));
-    if (body.enable_thinking === undefined) {
+    const injected = body.enable_thinking === undefined;
+    if (injected) {
       body.enable_thinking = true;
-      return Buffer.from(JSON.stringify(body), "utf8");
+      return { buffer: Buffer.from(JSON.stringify(body), "utf8"), injected, enableThinking: body.enable_thinking, body };
     }
+    return { buffer: bodyBuffer, injected, enableThinking: body.enable_thinking, body };
   } catch (e) {
     // 非 JSON 请求体（不应发生），原样透传
   }
-  return bodyBuffer;
+  return { buffer: bodyBuffer, injected: false, enableThinking: undefined, body: null };
 }
 
 // ── SSE 流式转发 ──────────────────────────────────────
@@ -479,15 +503,30 @@ const server = http.createServer(async (req, res) => {
   let bodyBuffer;
   let isStream = false;
   if (req.method !== "GET" && req.method !== "HEAD") {
-    bodyBuffer = await readRequestBody(req);
+    try {
+      bodyBuffer = await readRequestBody(req);
+    } catch (e) {
+      reqSidMap.delete(reqId);
+      const tooLarge = e.message === "request body too large";
+      if (!res.headersSent) {
+        res.writeHead(tooLarge ? 413 : 502, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: { message: e.message, type: "proxy_error" } }));
+      }
+      emit("failed", { id: reqId, reason: tooLarge ? "body_too_large" : "read_body_error", msg: e.message, durationMs: Date.now() - startTime },
+        `✗ 读取请求体失败: ${e.message}`);
+      return;
+    }
     if (isChat && bodyBuffer && bodyBuffer.length > 0) {
-      const before = bodyBuffer;
-      bodyBuffer = injectThinking(bodyBuffer);
-      if (bodyBuffer !== before) {
-        emit("think_inject", { id: reqId });
+      const r = injectThinking(bodyBuffer);
+      bodyBuffer = r.buffer;
+      if (r.injected) {
         delete headers["content-length"]; // 体长已变，交由 fetch 自动计算
       }
-      try { isStream = JSON.parse(bodyBuffer.toString("utf8")).stream === true; } catch {}
+      // simple 级日志：打印是否注入 + 最终 enable_thinking 参数与值，便于排查注入问题
+      emit("think_inject",
+        { id: reqId, injected: r.injected, enable_thinking: r.enableThinking },
+        `🔧 思考注入 请求=${reqId} 已注入=${r.injected} enable_thinking=${r.enableThinking}`);
+      isStream = r.body ? r.body.stream === true : false;
     }
   }
 
@@ -537,10 +576,14 @@ const server = http.createServer(async (req, res) => {
       const bodyText = await upstreamResp.text();
       const respHeaders = {};
       upstreamResp.headers.forEach((v, k) => {
-        if (k !== "transfer-encoding" && k !== "content-encoding") {
+        // 跳过传输/编码/长度头：fetch 已对 gzip 等自动解压 .text()，
+        // 原始 content-length 指向压缩前字节数，原样下发会与解压后的 body 长度不一致，
+        // 导致客户端按错误长度截断/挂起。content-length 下方按实际 body 字节重算。
+        if (k !== "transfer-encoding" && k !== "content-encoding" && k !== "content-length") {
           respHeaders[k] = v;
         }
       });
+      respHeaders["content-length"] = String(Buffer.byteLength(bodyText, "utf8"));
       res.writeHead(upstreamResp.status, respHeaders);
       res.end(bodyText);
       // 非流式：解析 usage 上报（用于诊断 cache 虚高）
