@@ -34,7 +34,7 @@ const STATUS_KEY = "xf-proxy";
 const POLL_MS = 500;
 const HEALTH_INTERVAL_MS = 10_000;
 const HEALTH_TIMEOUT_MS = 2000;
-const STALE_ACTIVE_MS = 90_000;
+const STALE_ACTIVE_MS = 330_000; // 略大于单次 fetch 超时 5min，避免正常长请求误判为卡死
 const DEFAULT_WIDGET_LINES = 8;
 const WIDGET_LINE_CAP = 60;
 const KEEP_RAW_LINES = 500;
@@ -299,9 +299,12 @@ function buildStatusBody(theme: Theme, rt: Runtime, now: number): string {
 			const left = theme.fg("error", `⛔ ${t.reason ?? "failed"} ${t.retries}× ${fmtDur(t.durationMs)} `);
 			return left + renderStack(theme, rt.stack, "error");
 		}
-		case "cancelled":
-			// ✗ 串不动，转 dim
-			return renderStack(theme, rt.stack, "dim");
+		case "cancelled": {
+			const t = rt.terminal;
+			if (t.retries === 0) return theme.fg("dim", `⊘ ${fmtDur(t.durationMs)}`);
+			const left = theme.fg("dim", `⊘ ${t.retries}× ${fmtDur(t.durationMs)} `);
+			return left + renderStack(theme, rt.stack, "dim");
+		}
 	}
 }
 
@@ -333,10 +336,10 @@ function formatEventReadable(theme: Theme, ev: Record<string, unknown>): string 
 			color = "accent";
 			break;
 		case "think_inject":
-			msg = `${id} 🧠 think`;
+			msg = `${id} 🧠 think 注入=${ev.injected} val=${ev.enable_thinking}`;
 			break;
 		case "retry":
-			msg = `${id} 🔄 ${ev.reason === "http" ? `HTTP ${ev.status}` : ev.reason} ${ev.attempt}/${ev.max} fails${ev.fails}`;
+			msg = `${id} 🔄 ${ev.reason === "http" ? `HTTP ${ev.status}` : ev.reason} ${ev.attempt}/${ev.max} 连败${ev.fails}`;
 			color = "warning";
 			break;
 		case "cooldown":
@@ -358,6 +361,10 @@ function formatEventReadable(theme: Theme, ev: Record<string, unknown>): string 
 		case "stream_interrupt":
 			msg = `${id} ⚠ 流中断`;
 			color = "warning";
+			break;
+		case "usage":
+			msg = `${id} 📊 in=${ev.in} out=${ev.out} cached=${ev.cached ?? 0} total=${ev.total} (${ev.finish ?? "-"}) reqB=${ev.reqBytes}`;
+			color = "dim";
 			break;
 		default:
 			msg = JSON.stringify(ev).slice(0, 80);
