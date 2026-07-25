@@ -4,7 +4,7 @@
 # 用法（install/uninstall 需管理员，status 不需要）：
 #   .\service.ps1 install     安装/刷新服务
 #   .\service.ps1 uninstall   卸载服务
-#   .\service.ps1 status      查看服务状态 + 最近 stderr
+#   .\service.ps1 status      查看服务状态 + 最近运行日志
 #
 # 配置来源：根目录 .env（SVC_NAME / NODE_EXE / PROXY_PORT）
 #   代理自身的运行参数（API Key、重试、日志等）也写在 .env，
@@ -103,12 +103,21 @@ switch ($Action) {
     Start-Sleep -Seconds 2
 
     Write-Host "5) 验证 ..." -ForegroundColor Cyan
-    try {
-      $h = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5
+    $ok = $false
+    for ($i = 1; $i -le 3; $i++) {
+      try {
+        $h = Invoke-RestMethod "http://127.0.0.1:$port/health" -TimeoutSec 5
+        $ok = $true
+        break
+      } catch {
+        if ($i -lt 3) { Start-Sleep -Seconds 1 }
+      }
+    }
+    if ($ok) {
       Write-Host "✓ 服务运行中，health = $($h.status)" -ForegroundColor Green
-    } catch {
-      Write-Host "✗ health 检查失败: $($_.Exception.Message)" -ForegroundColor Red
-      Write-Host "  排查: Get-Service $svcName; Get-Content $stderrLog -Tail 30" -ForegroundColor Yellow
+    } else {
+      Write-Host "✗ health 检查失败（已重试 3 次）" -ForegroundColor Red
+      Write-Host "  排查: Get-Service $svcName; Get-Content $stdoutLog,$stderrLog -Tail 30" -ForegroundColor Yellow
     }
 
     # 旧登录自启 VBS 会和新服务冲突，禁用（重命名为 .bak 可恢复）
@@ -124,7 +133,7 @@ switch ($Action) {
     Write-Host "  停止:  Stop-Service $svcName        (systemctl stop)"
     Write-Host "  重启:  Restart-Service $svcName     (systemctl restart)"
     Write-Host "  卸载:  .\service.ps1 uninstall"
-    Write-Host "  日志:  Get-Content $stderrLog -Tail 30 -Wait"
+    Write-Host "  运行日志: Get-Content $stdoutLog -Tail 30 -Wait  (错误见 $stderrLog)"
     Write-Host "`n  改配置: 编辑 .env 后 Restart-Service $svcName 即可生效" -ForegroundColor DarkGray
   }
 
@@ -145,7 +154,9 @@ switch ($Action) {
     $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
     if (-not $svc) { Write-Host "服务 $svcName 未安装" -ForegroundColor Yellow; return }
     $svc | Format-Table Name,Status,StartType -AutoSize
-    Write-Host "`n=== 最近 stderr 日志 ===" -ForegroundColor Cyan
+    Write-Host "`n=== 最近运行日志 (stdout) ===" -ForegroundColor Cyan
+    if (Test-Path $stdoutLog) { Get-Content $stdoutLog -Tail 15 } else { "(无 stdout 日志)" }
+    Write-Host "`n=== 最近错误 (stderr) ===" -ForegroundColor Cyan
     if (Test-Path $stderrLog) { Get-Content $stderrLog -Tail 15 } else { "(无 stderr 日志)" }
   }
 }

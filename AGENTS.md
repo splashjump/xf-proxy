@@ -24,7 +24,7 @@
 - 服务状态：`.\service.ps1 status`
 - 健康检查：`Invoke-RestMethod http://127.0.0.1:3000/health`
 - 实时事件：`Get-Content logs\proxy-events.jsonl -Wait -Tail 20 -Encoding UTF8`
-- 实时 stderr：`Get-Content logs\proxy-stderr.log -Wait -Tail 20 -Encoding UTF8`
+- 实时运行日志：`Get-Content logs\proxy-stdout.log -Wait -Tail 20 -Encoding UTF8`（仅 failed/fatal 进 `logs\proxy-stderr.log`）
 
 ## 已知根因（避免重复排查）
 

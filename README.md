@@ -42,7 +42,7 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 | `MAX_RETRIES` | 最大重试次数 | `50` |
 | `COOLDOWN_AFTER` | 触发冷却的连续失败次数 | `10` |
 | `COOLDOWN_MS` | 冷却时长 ms | `5000` |
-| `LOG_LEVEL` | none / simple / full | `none` |
+| `LOG_LEVEL` | none / simple / full | `simple` |
 | `EVENT_LOG_MAX_LINES` | 事件日志滚动行数 | `1000` |
 | `LOG_DIR` | 日志目录 | `<脚本目录>/logs` |
 | `SVC_NAME` | 服务名 | `xf-proxy` |
@@ -68,12 +68,13 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 | 文件 | 内容 |
 |------|------|
 | `logs/proxy-events.jsonl` | 结构化事件（始终写，滚动；供 pi 扩展读取） |
-| `logs/proxy-stderr.log` | 可读 stderr（nssm 重定向；simple/full 级） |
+| `logs/proxy-stdout.log` | 可读运行日志（nssm 重定向 stdout；simple/full 级，含启动/重试/成功） |
+| `logs/proxy-stderr.log` | 可读错误日志（nssm 重定向 stderr；simple/full 级，仅 failed/fatal） |
 | `logs/proxy.log` | 完整请求/响应明文（仅 full 级） |
 
 ```powershell
 Get-Content logs\proxy-events.jsonl -Wait -Tail 20 -Encoding UTF8
-Get-Content logs\proxy-stderr.log -Wait -Tail 20 -Encoding UTF8
+Get-Content logs\proxy-stdout.log -Wait -Tail 20 -Encoding UTF8
 ```
 
 > `full` 级会记录完整对话明文，仅用于调试，排查完建议切回 `none`/`simple`。
