@@ -325,24 +325,47 @@ function readRequestBody(req) {
   });
 }
 
-// ── 注入 enable_thinking ───────────────────────────────
-// 讯飞模型默认不开启思考，在请求体缺失 enable_thinking 时自动补入
-// 返回 { buffer, injected, enableThinking }：
-//   injected       — 是否补入（请求体原缺失 enable_thinking）
-//   enableThinking — 最终生效的 enable_thinking 值（原值或注入后的 true）
+// ── 注入思考参数 ──────────────────────────────────────
+// 统一注入 enable_thinking(true) 与 reasoning_effort(默认 "high")，兼容认 enable_thinking
+// 的模型(如 kimi26)与认 reasoning_effort 的模型(如 GLM-5.2)。
+//
+// 规则：
+//   1) 检测到关闭意愿(reasoning_effort==="none" 或 enable_thinking===false/"false")
+//      → 两者都设关闭：enable_thinking=false, reasoning_effort="none"
+//   2) 否则：enable_thinking 注入 true；reasoning_effort 保留客户端原值，未传则补 "high"
+//
+// 返回 { buffer, injected, enableThinking, reasoningEffort, mode, origEnable, origEffort, body }
+//   mode: "off" | "inject" | "passthrough"
+//   orig* 为客户端原始值，供日志展示 原→现 对比
 function injectThinking(bodyBuffer) {
   try {
     const body = JSON.parse(bodyBuffer.toString("utf8"));
-    const injected = body.enable_thinking === undefined;
-    if (injected) {
-      body.enable_thinking = true;
-      return { buffer: Buffer.from(JSON.stringify(body), "utf8"), injected, enableThinking: body.enable_thinking, body };
+    const origEnable = body.enable_thinking;
+    const origEffort = body.reasoning_effort;
+    // 关闭意愿：reasoning_effort 显式 none，或 enable_thinking 显式 false(布尔/字符串)
+    const wantOff = origEffort === "none" || origEnable === false || origEnable === "false";
+    let enableThinking, reasoningEffort, mode;
+    if (wantOff) {
+      enableThinking = false;
+      reasoningEffort = "none";
+      mode = "off";
+    } else {
+      // enable_thinking 始终注入 true；reasoning_effort 保留原值(如 max)，没传则补 high
+      enableThinking = true;
+      reasoningEffort = origEffort !== undefined ? origEffort : "high";
+      mode = (origEnable === undefined || origEffort === undefined) ? "inject" : "passthrough";
     }
-    return { buffer: bodyBuffer, injected, enableThinking: body.enable_thinking, body };
+    const changed = body.enable_thinking !== enableThinking || body.reasoning_effort !== reasoningEffort;
+    if (changed) {
+      body.enable_thinking = enableThinking;
+      body.reasoning_effort = reasoningEffort;
+      return { buffer: Buffer.from(JSON.stringify(body), "utf8"), injected: true, enableThinking, reasoningEffort, mode, origEnable, origEffort, body };
+    }
+    return { buffer: bodyBuffer, injected: false, enableThinking, reasoningEffort, mode, origEnable, origEffort, body };
   } catch (e) {
     // 非 JSON 请求体（不应发生），原样透传
   }
-  return { buffer: bodyBuffer, injected: false, enableThinking: undefined, body: null };
+  return { buffer: bodyBuffer, injected: false, enableThinking: undefined, reasoningEffort: undefined, mode: "passthrough", origEnable: undefined, origEffort: undefined, body: null };
 }
 
 // ── SSE 流式转发 ──────────────────────────────────────
@@ -522,10 +545,11 @@ const server = http.createServer(async (req, res) => {
       if (r.injected) {
         delete headers["content-length"]; // 体长已变，交由 fetch 自动计算
       }
-      // simple 级日志：打印是否注入 + 最终 enable_thinking 参数与值，便于排查注入问题
+      // simple 级日志：打印思考参数 原→现 转换 + 处理方式（关闭/补全/透传）
+      const _fv = v => v === undefined ? "" : v;
       emit("think_inject",
-        { id: reqId, injected: r.injected, enable_thinking: r.enableThinking },
-        `🔧 思考注入 请求=${reqId} 已注入=${r.injected} enable_thinking=${r.enableThinking}`);
+        { id: reqId, injected: r.injected, enable_thinking: r.enableThinking, reasoning_effort: r.reasoningEffort, mode: r.mode, orig_enable_thinking: r.origEnable, orig_reasoning_effort: r.origEffort },
+        `🔧 思考注入 请求=${reqId} [${r.mode === "off" ? "关闭" : r.injected ? "补全" : "透传"}] enable_thinking=[${_fv(r.origEnable)}]->[${_fv(r.enableThinking)}] reasoning_effort=[${_fv(r.origEffort)}]->[${_fv(r.reasoningEffort)}]`);
       isStream = r.body ? r.body.stream === true : false;
     }
   }
