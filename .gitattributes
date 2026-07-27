@@ -1,0 +1,9 @@
+# 统一行尾：文本文件自动判 LF/CRLF，PowerShell/bat 强制 CRLF（Windows 脚本惯例）
+* text=auto eol=lf
+
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+# 二进制不参与行尾转换
+*.exe   binary

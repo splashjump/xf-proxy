@@ -20,11 +20,12 @@
  *   LOG_LEVEL            可读日志级别: none / simple / full（默认 simple；simple/full 级按事件类型分流 stdout/stderr，见 emit()）
  *   LOG_DIR              日志输出目录（默认 <脚本目录>/logs）
  *   EVENT_LOG_MAX_LINES 结构化事件日志滚动行数（默认 1000）
+ *   PI_EVENT_LOG         是否写 proxy-events.jsonl 供 pi 扩展读取（默认 false；本地设 true 开启）
  *
  *   以上变量也可写入根目录 .env，启动时自动加载（不覆盖已存在的环境变量）。
  *
  * 日志产物：
- *   logs/proxy-events.jsonl  结构化事件（始终写，滚动；供 pi 扩展读取）
+ *   logs/proxy-events.jsonl  结构化事件（仅 PI_EVENT_LOG=true 时写，滚动；供 pi 扩展读取）
  *   logs/proxy-stdout.log   可读运行日志（nssm 重定向 stdout；simple/full 级，含启动/重试/成功等）
  *   logs/proxy-stderr.log   可读错误日志（nssm 重定向 stderr；simple/full 级，仅 failed/fatal）
  *   logs/proxy.log          full 级完整请求/响应明文
@@ -81,6 +82,8 @@ const LOG_DIR = process.env.LOG_DIR || path.join(__dirname, "logs");
 const LOG_FILE = path.join(LOG_DIR, "proxy.log");              // full 模式日志（完整请求/响应）
 const LOG_EVENTS_FILE = path.join(LOG_DIR, "proxy-events.jsonl"); // 结构化事件日志（供 pi 扩展读取，滚动）
 const EVENT_LOG_MAX_LINES = parseInt(process.env.EVENT_LOG_MAX_LINES || "1000", 10) || 1000;
+// pi 扩展结构化事件日志开关：默认关闭（不写 proxy-events.jsonl）；本地 .env 设 PI_EVENT_LOG=true 开启
+const PI_EVENT_LOG = /^(1|true|yes|on)$/i.test(process.env.PI_EVENT_LOG || "");
 
 // ── 日志工具 ──────────────────────────────────────────
 function _ts() {
@@ -97,6 +100,7 @@ function _ts() {
 // 文件超过上限 1.2× 时裁剪到上限，保持滚动窗口。
 let _eventLineCount = -1;
 function _appendEventLine(line) {
+  if (!PI_EVENT_LOG) return; // 默认不写；PI_EVENT_LOG=true 时才落盘
   try {
     fs.appendFileSync(LOG_EVENTS_FILE, line + "\n");
     if (_eventLineCount < 0) {
@@ -498,7 +502,8 @@ const server = http.createServer(async (req, res) => {
   if (path === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" });
     // 自报日志路径，供 pi 扩展发现（方案 C：代理是日志路径的唯一权威）
-    res.end(JSON.stringify({ status: "ok", logPath: LOG_EVENTS_FILE }));
+    // PI_EVENT_LOG 关闭时返回空串 → 插件不建 tailer，footer 显示 —
+    res.end(JSON.stringify({ status: "ok", logPath: PI_EVENT_LOG ? LOG_EVENTS_FILE : "" }));
     return;
   }
 
@@ -659,7 +664,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 // ── 启动 ──────────────────────────────────────────────
-// 结构化事件日志始终写入，日志目录必须存在
+// 日志目录必须存在（full 级 proxy.log / pi 事件日志都写在此）
 const _LEVEL_NAME = Object.keys(LOG_LEVELS).find((k) => LOG_LEVELS[k] === LOG_LEVEL);
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
 
@@ -694,7 +699,7 @@ server.listen(PORT, "127.0.0.1", () => {
     `  重试上限: ${MAX_RETRIES} 次`,
     `  冷却策略: 每 ${COOLDOWN_AFTER} 次连续失败冷却 ${COOLDOWN_MS / 1000}s`,
     `  日志级别: ${_LEVEL_NAME}${LOG_LEVEL >= 2 ? ` + ${LOG_FILE}` : ""}`,
-    `  事件日志: ${LOG_EVENTS_FILE} (滚动 ${EVENT_LOG_MAX_LINES} 行)`,
+    `  事件日志: ${PI_EVENT_LOG ? `${LOG_EVENTS_FILE} (滚动 ${EVENT_LOG_MAX_LINES} 行)` : "已关闭 (设 PI_EVENT_LOG=true 开启，供 pi 扩展读取)"}`,
     "═══════════════════════════════════════════",
   ].join("\n");
   emit("start", {
