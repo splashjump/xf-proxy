@@ -3,7 +3,8 @@
 # 平时无需手动启动：nssm 服务已设置开机自启 + 崩溃自动重启
 
 $ErrorActionPreference = "Stop"
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dir = Split-Path $here -Parent   # script/ 的父目录 = 仓库根（.env、logs 都在根）
 
 # 从 .env 读服务名与端口
 function Get-EnvVar($key, $default) {

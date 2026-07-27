@@ -22,10 +22,8 @@
 ```
 xunfei-proxy.js        代理脚本
 .env / .env.example    配置（.env 不提交）
-service.ps1            服务安装/卸载/状态
-start-proxy.ps1        启动封装
-stop-proxy.ps1         停止封装
-script/                双击安装/卸载入口（UAC 提权）
+service.ps1            服务安装/卸载/状态（逻辑核心，无提权）
+script/                双击启动/停止/安装/卸载入口（UAC 提权，包装 service.ps1）
 bin/nssm.exe           服务管理工具
 logs/                  运行时日志
 pi-extension/          pi 扩展（footer 显示代理状态，见其 AGENTS.md）
@@ -83,8 +81,8 @@ Invoke-RestMethod http://127.0.0.1:3000/health
 
 | 操作 | 命令 |
 |------|------|
-| 启动 | `Start-Service xf-proxy`（管理员）或 `.\start-proxy.ps1` |
-| 停止 | `Stop-Service xf-proxy`（管理员）或 `.\stop-proxy.ps1` |
+| 启动 | `Start-Service xf-proxy`（管理员）或双击 `script\start-proxy.bat` |
+| 停止 | `Stop-Service xf-proxy`（管理员）或双击 `script\stop-proxy.bat` |
 | 重启 | `Restart-Service xf-proxy`（管理员） |
 | 状态 | `.\service.ps1 status` 或 `Get-Service xf-proxy` |
 | 安装/刷新 | `.\service.ps1 install`（管理员）或双击 `script\install-proxy.bat` |

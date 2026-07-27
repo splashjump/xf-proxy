@@ -2,7 +2,8 @@
 # 双击或命令行调用，自动 UAC 提权后停止 xf-proxy 服务
 
 $ErrorActionPreference = "Stop"
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dir = Split-Path $here -Parent   # script/ 的父目录 = 仓库根（.env 在根）
 
 # 从 .env 读服务名
 function Get-EnvVar($key, $default) {
