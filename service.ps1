@@ -41,7 +41,6 @@ function Get-EnvVar($key, $default) {
 $svcName = Get-EnvVar "SVC_NAME" "xf-proxy"
 $nodeExe = Get-EnvVar "NODE_EXE" ""
 if (-not $nodeExe) { $nodeExe = (Get-Command node -ErrorAction SilentlyContinue).Source }
-if (-not $nodeExe) { $nodeExe = "C:\nvm4w\nodejs\node.exe" }   # 兜底：服务机器上 node 不在系统 PATH
 $port = Get-EnvVar "PROXY_PORT" "3000"
 $script = Join-Path $dir "xunfei-proxy.js"
 $logDir = Join-Path $dir "logs"
@@ -66,6 +65,7 @@ switch ($Action) {
     if (-not (Test-Path $nssm))  { Write-Host "找不到 nssm: $nssm" -ForegroundColor Red; exit 1 }
     if (-not (Test-Path $script)){ Write-Host "找不到代理脚本: $script" -ForegroundColor Red; exit 1 }
     if (-not (Test-Path (Join-Path $dir ".env"))) { Write-Host "找不到 .env：请从 .env.example 复制并填入 XFYUN_API_KEY" -ForegroundColor Red; exit 1 }
+    if (-not $nodeExe -or -not (Test-Path $nodeExe)) { Write-Host "找不到 node：请装 Node.js ≥18（winget install OpenJS.NodeJS.LTS），或在 .env 设 NODE_EXE 指向 node.exe 绝对路径" -ForegroundColor Red; exit 1 }
 
     Write-Host "1) 停掉旧方式启动的代理（释放端口 $port）..." -ForegroundColor Cyan
     Stop-ExistingProxy | Out-Null
